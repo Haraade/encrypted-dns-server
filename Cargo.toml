@@ -1,6 +1,6 @@
 [package]
 name = "encrypted-dns"
-version = "0.9.7"
+version = "0.9.9"
 authors = ["Frank Denis <github@pureftpd.org>"]
 edition = "2018"
 description = "A modern encrypted DNS server (DNSCrypt v2, Anonymized DNSCrypt, DoH)"
@@ -12,9 +12,9 @@ categories = ["asynchronous", "network-programming", "command-line-utilities"]
 readme = "README.md"
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.61"
 byteorder = "1.4.3"
-clap = { version = "3.2.13", default-features = false, features = [
+clap = { version = "3.2.17", default-features = false, features = [
   "std",
   "cargo",
   "wrap_help",
@@ -27,7 +27,7 @@ dnsstamps = "0.1.9"
 env_logger = { version = "0.9.0", default-features = false, features = [
   "humantime",
 ] }
-futures = { version = "0.3.21", features = ["async-await"] }
+futures = { version = "0.3.23", features = ["async-await"] }
 hyper = { version = "0.14.20", default_features = false, features = [
   "server",
   "http1",
@@ -41,12 +41,12 @@ parking_lot = "0.12.1"
 rand = "0.8.5"
 rlimit = "0.8.3"
 rustc-hash = "1.1.0"
-serde = "1.0.139"
-serde_derive = "1.0.139"
+serde = "1.0.143"
+serde_derive = "1.0.143"
 serde-big-array = "0.4.1"
 siphasher = "0.3.10"
-slabigator = "0.1.4"
-tokio = { version = "1.20.0", features = [
+slabigator = "0.2.0"
+tokio = { version = "1.20.1", features = [
   "net",
   "io-std",
   "io-util",
