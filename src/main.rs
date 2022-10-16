@@ -35,7 +35,6 @@ mod resolver;
 #[cfg(feature = "metrics")]
 mod varz;
 
-use std::collections::vec_deque::VecDeque;
 use std::convert::TryFrom;
 use std::fs::File;
 use std::io::prelude::*;
@@ -58,14 +57,17 @@ use dnscrypt::*;
 use dnscrypt_certs::*;
 use dnsstamps::{InformalProperty, WithInformalProperty};
 use errors::*;
+use future::Either;
 use futures::join;
 use futures::prelude::*;
 use globals::*;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+#[cfg(target_family = "unix")]
 use privdrop::PrivDrop;
 use rand::prelude::*;
 use siphasher::sip128::SipHasher13;
+use slabigator::Slab;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 use tokio::runtime::Handle;
@@ -283,16 +285,30 @@ async fn tcp_acceptor(globals: Arc<Globals>, tcp_listener: TcpListener) -> Resul
     let timeout = globals.tcp_timeout;
     let concurrent_connections = globals.tcp_concurrent_connections.clone();
     let active_connections = globals.tcp_active_connections.clone();
-    while let Ok((mut client_connection, _client_addr)) = tcp_listener.accept().await {
+    loop {
+        let (mut client_connection, _client_addr) = match tcp_listener.accept().await {
+            Ok(x) => x,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    continue;
+                }
+                warn!("TCP accept error: {}", e);
+                if let Some(tx_oldest) = active_connections.lock().pop_back() {
+                    let _ = tx_oldest.send(());
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
         let (tx, rx) = oneshot::channel::<()>();
-        {
+        let tx_channel_index = {
             let mut active_connections = active_connections.lock();
-            if active_connections.len() >= globals.tcp_max_active_connections as _ {
+            if active_connections.is_full() {
                 let tx_oldest = active_connections.pop_back().unwrap();
                 let _ = tx_oldest.send(());
             }
-            active_connections.push_front(tx);
-        }
+            active_connections.push_front(tx)?
+        };
         let _count = concurrent_connections.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "metrics")]
         let varz = globals.varz.clone();
@@ -303,6 +319,7 @@ async fn tcp_acceptor(globals: Arc<Globals>, tcp_listener: TcpListener) -> Resul
         }
         client_connection.set_nodelay(true)?;
         let globals = globals.clone();
+        let active_connections = active_connections.clone();
         let concurrent_connections = concurrent_connections.clone();
         let fut = async {
             let mut binlen = [0u8, 0];
@@ -323,13 +340,20 @@ async fn tcp_acceptor(globals: Arc<Globals>, tcp_listener: TcpListener) -> Resul
         };
         let fut_abort = rx;
         let fut_all = tokio::time::timeout(timeout, future::select(fut.boxed(), fut_abort));
-        runtime_handle.spawn(fut_all.map(move |_| {
+        runtime_handle.spawn(fut_all.map(move |either| {
             let _count = concurrent_connections.fetch_sub(1, Ordering::Relaxed);
             #[cfg(feature = "metrics")]
             varz.inflight_tcp_queries.set(_count.saturating_sub(1) as _);
+
+            if let Ok(Either::Right(_)) = either {
+                // Removing the active connection was already done during
+                // cancellation.
+            } else {
+                let mut active_connections = active_connections.lock();
+                _ = active_connections.remove(tx_channel_index);
+            }
         }));
     }
-    Ok(())
 }
 
 #[allow(unreachable_code)]
@@ -355,14 +379,14 @@ async fn udp_acceptor(
             client_addr,
         });
         let (tx, rx) = oneshot::channel::<()>();
-        {
+        let tx_channel_index = {
             let mut active_connections = active_connections.lock();
-            if active_connections.len() >= globals.tcp_max_active_connections as _ {
+            if active_connections.is_full() {
                 let tx_oldest = active_connections.pop_back().unwrap();
                 let _ = tx_oldest.send(());
             }
-            active_connections.push_front(tx);
-        }
+            active_connections.push_front(tx)?
+        };
         let _count = concurrent_connections.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "metrics")]
         let varz = globals.varz.clone();
@@ -372,14 +396,23 @@ async fn udp_acceptor(
             varz.client_queries_udp.inc();
         }
         let globals = globals.clone();
+        let active_connections = active_connections.clone();
         let concurrent_connections = concurrent_connections.clone();
         let fut = handle_client_query(globals, client_ctx, packet);
         let fut_abort = rx;
         let fut_all = tokio::time::timeout(timeout, future::select(fut.boxed(), fut_abort));
-        runtime_handle.spawn(fut_all.map(move |_| {
+        runtime_handle.spawn(fut_all.map(move |either| {
             let _count = concurrent_connections.fetch_sub(1, Ordering::Relaxed);
             #[cfg(feature = "metrics")]
             varz.inflight_udp_queries.set(_count.saturating_sub(1) as _);
+
+            if let Ok(Either::Right(_)) = either {
+                // Removing the active connection was already done during
+                // cancellation.
+            } else {
+                let mut active_connections = active_connections.lock();
+                _ = active_connections.remove(tx_channel_index);
+            }
         }));
     }
 }
@@ -461,6 +494,7 @@ fn bind_listeners(
     Ok(sockets)
 }
 
+#[cfg(target_family = "unix")]
 fn privdrop(config: &Config) -> Result<(), Error> {
     let mut pd = PrivDrop::default();
     if let Some(user) = &config.user {
@@ -491,6 +525,34 @@ fn privdrop(config: &Config) -> Result<(), Error> {
             .doit()
             .map_err(|e| anyhow!("Unable to daemonize: [{}]", e))?;
     }
+    Ok(())
+}
+
+#[cfg(not(target_family = "unix"))]
+fn set_limits(_config: &Config) -> Result<(), Error> {
+    Ok(())
+}
+
+#[cfg(target_family = "unix")]
+fn set_limits(config: &Config) -> Result<(), Error> {
+    use rlimit::Resource;
+    let nb_descriptors = 4u32
+        .saturating_mul(
+            config
+                .tcp_max_active_connections
+                .saturating_add(config.udp_max_active_connections)
+                .saturating_add(config.listen_addrs.len() as u32),
+        )
+        .saturating_add(16);
+    let (_soft, hard) = Resource::NOFILE.get()?;
+    if nb_descriptors as u64 > hard as u64 {
+        warn!(
+            "Unable to set the number of open files to {}. The hard limit is {}",
+            nb_descriptors, hard
+        );
+    }
+    let nb_descriptors = std::cmp::max(nb_descriptors as _, hard);
+    Resource::NOFILE.set(nb_descriptors, nb_descriptors)?;
     Ok(())
 }
 
@@ -532,6 +594,9 @@ fn main() -> Result<(), Error> {
 
     let config_path = matches.value_of("config").unwrap();
     let config = Config::from_path(config_path)?;
+    if let Err(e) = set_limits(&config) {
+        warn!("Unable to set limits: [{}]", e);
+    }
     let dnscrypt_enabled = config.dnscrypt.enabled.unwrap_or(true);
     let provider_name = match &config.dnscrypt.provider_name {
         provider_name if provider_name.starts_with("2.dnscrypt-cert.") => provider_name.to_string(),
@@ -552,6 +617,7 @@ fn main() -> Result<(), Error> {
     runtime_builder.thread_name("encrypted-dns-");
     let runtime = runtime_builder.build()?;
 
+    #[cfg(target_family = "unix")]
     privdrop(&config)?;
 
     let key_cache_capacity = config.dnscrypt.key_cache_capacity;
@@ -714,12 +780,12 @@ fn main() -> Result<(), Error> {
         tcp_concurrent_connections: Arc::new(AtomicU32::new(0)),
         udp_max_active_connections: config.udp_max_active_connections,
         tcp_max_active_connections: config.tcp_max_active_connections,
-        udp_active_connections: Arc::new(Mutex::new(VecDeque::with_capacity(
+        udp_active_connections: Arc::new(Mutex::new(Slab::with_capacity(
             config.udp_max_active_connections as _,
-        ))),
-        tcp_active_connections: Arc::new(Mutex::new(VecDeque::with_capacity(
+        )?)),
+        tcp_active_connections: Arc::new(Mutex::new(Slab::with_capacity(
             config.tcp_max_active_connections as _,
-        ))),
+        )?)),
         key_cache_capacity,
         hasher,
         cache,

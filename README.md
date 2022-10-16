@@ -18,9 +18,9 @@ All of these can be served simultaneously, on the same port (usually port 443). 
 
 ## Installation
 
-### Option 1: precompiled binary for Linux
+### Option 1: precompiled x86_64 binary
 
-Precompiled tarballs and Debian packages for Linux/x86_64 [can be downloaded here](https://github.com/jedisct1/encrypted-dns-server/releases/latest).
+Debian packages, archives for Linux and Windows [can be downloaded here](https://github.com/jedisct1/encrypted-dns-server/releases/latest).
 
 Nothing else has to be installed. The server doesn't require any external dependencies.
 
@@ -64,7 +64,7 @@ Make a copy of the `example-encrypted-dns.toml` configuration file named `encryp
 
 Then, review the [`encrypted-dns.toml`](https://raw.githubusercontent.com/jedisct1/encrypted-dns-server/master/example-encrypted-dns.toml) file. This is where all the parameters can be configured, including the IP addresses to listen to.
 
-You should probably at least change the `listen_addresses` and `provider_name` settings.
+You should probably at least change the `listen_addrs` and `provider_name` settings.
 
 Start the proxy. It will automatically create a new provider key pair if there isn't any.
 

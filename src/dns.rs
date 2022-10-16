@@ -423,7 +423,7 @@ fn add_edns_section(packet: &mut Vec<u8>, max_payload_size: u16) -> Result<(), E
         "Packet would be too large to add a new record"
     );
     arcount_inc(packet)?;
-    packet.extend(&opt_rr);
+    packet.extend(opt_rr);
     Ok(())
 }
 
@@ -483,7 +483,7 @@ pub fn serve_certificates<'t>(
     if !qname.eq_ignore_ascii_case(expected_qname) {
         return Ok(None);
     }
-    let mut packet = (&client_packet[..offset + 4]).to_vec();
+    let mut packet = client_packet[..offset + 4].to_vec();
     an_ns_ar_count_clear(&mut packet);
     authoritative_response(&mut packet);
     let dnscrypt_encryption_params = dnscrypt_encryption_params_set
