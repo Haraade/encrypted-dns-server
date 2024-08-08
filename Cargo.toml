@@ -32,7 +32,7 @@ hyper = { version = "0.14.29", default-features = false, features = [
   "http1",
 ], optional = true }
 ipext = "0.1.0"
-libsodium-sys-stable = "1.20.9"
+libsodium-sys-stable = "1.21.1"
 log = { version = "0.4.22", features = ["std", "release_max_level_debug"] }
 mimalloc = { version = "0.1.43", default-features = false }
 socket2 = "0.5.7"
@@ -40,8 +40,8 @@ parking_lot = "0.12.3"
 rand = "0.8.5"
 rlimit = "0.10.1"
 rustc-hash = "2.0.0"
-serde = "1.0.204"
-serde_derive = "1.0.204"
+serde = "1.0.205"
+serde_derive = "1.0.205"
 serde-big-array = "0.5.1"
 sieve-cache = "0.2.1"
 siphasher = "1.0.1"
