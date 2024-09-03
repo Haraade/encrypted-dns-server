@@ -38,15 +38,15 @@ mimalloc = { version = "0.1.43", default-features = false }
 socket2 = "0.5.7"
 parking_lot = "0.12.3"
 rand = "0.8.5"
-rlimit = "0.10.1"
+rlimit = "0.10.2"
 rustc-hash = "2.0.0"
-serde = "1.0.205"
-serde_derive = "1.0.205"
+serde = "1.0.209"
+serde_derive = "1.0.209"
 serde-big-array = "0.5.1"
 sieve-cache = "0.2.1"
 siphasher = "1.0.1"
 slabigator = "0.9.2"
-tokio = { version = "1.39.2", features = [
+tokio = { version = "1.40.0", features = [
   "net",
   "io-std",
   "io-util",
