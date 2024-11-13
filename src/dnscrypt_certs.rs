@@ -15,8 +15,8 @@ use crate::crypto::*;
 use crate::dnscrypt::*;
 use crate::globals::*;
 
-pub const DNSCRYPT_CERTS_TTL: u32 = 86400;
-pub const DNSCRYPT_CERTS_RENEWAL: u32 = 28800;
+pub const DNSCRYPT_CERTS_TTL: u32 = 43200;
+pub const DNSCRYPT_CERTS_RENEWAL: u32 = 14400;
 
 fn now() -> u32 {
     SystemTime::now()
