@@ -34,7 +34,7 @@ hyper = { version = "0.14.32", default-features = false, features = [
 ipext = "0.1.0"
 libsodium-sys-stable = "1.22.2"
 log = { version = "0.4.27", features = ["std", "release_max_level_debug"] }
-mimalloc = { version = "0.1.44", default-features = false }
+mimalloc = { version = "0.1.45", default-features = false }
 parking_lot = "0.12.3"
 rand = "0.8.5"
 rlimit = "0.10.2"
@@ -46,7 +46,7 @@ sieve-cache = "0.2.1"
 siphasher = "1.0.1"
 slabigator = "0.9.3"
 socket2 = "0.5.8"
-tokio = { version = "1.44.1", features = [
+tokio = { version = "1.44.2", features = [
   "net",
   "io-std",
   "io-util",
