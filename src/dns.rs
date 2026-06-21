@@ -460,10 +460,41 @@ pub fn set_edns_max_payload_size(packet: &mut Vec<u8>, max_payload_size: u16) ->
     Ok(())
 }
 
+/// Number of bytes `append_txt_cert` adds for a certificate of this length: the
+/// resource-record header plus the TXT rdata, which carries a one-byte length
+/// prefix per 255-byte chunk.
+fn txt_cert_rr_len(cert_bin: &[u8]) -> usize {
+    let n_chunks = cert_bin.len().div_ceil(255);
+    // name(2) + type(2) + class(2) + ttl(4) + rdlength(2) + rdata
+    12 + cert_bin.len() + n_chunks
+}
+
+/// Append one certificate as a TXT resource record, splitting it into
+/// character-strings of at most 255 bytes so large (post-quantum) certificates
+/// fit the TXT RR encoding.
+fn append_txt_cert(packet: &mut Vec<u8>, cert_bin: &[u8]) -> Result<(), Error> {
+    let n_chunks = cert_bin.len().div_ceil(255);
+    let rdlength = cert_bin.len() + n_chunks;
+    ensure!(rdlength <= 0xffff, "Certificate too long");
+    ancount_inc(packet)?;
+    packet.write_u16::<BigEndian>(0xc000 + DNS_HEADER_SIZE as u16)?;
+    packet.write_u16::<BigEndian>(DNS_TYPE_TXT)?;
+    packet.write_u16::<BigEndian>(DNS_CLASS_INET)?;
+    packet.write_u32::<BigEndian>(DNSCRYPT_CERTS_RENEWAL)?;
+    packet.write_u16::<BigEndian>(rdlength as u16)?;
+    for chunk in cert_bin.chunks(255) {
+        packet.write_u8(chunk.len() as u8)?;
+        packet.extend_from_slice(chunk);
+    }
+    Ok(())
+}
+
 pub fn serve_certificates<'t>(
     client_packet: &[u8],
     expected_qname: &str,
     dnscrypt_encryption_params_set: impl IntoIterator<Item = &'t Arc<DNSCryptEncryptionParams>>,
+    pq_enabled: bool,
+    over_udp: bool,
 ) -> Result<Option<Vec<u8>>, Error> {
     ensure!(client_packet.len() >= DNS_HEADER_SIZE, "Short packet");
     ensure!(qdcount(client_packet) == 1, "No question");
@@ -490,16 +521,31 @@ pub fn serve_certificates<'t>(
         .into_iter()
         .max_by_key(|x| x.dnscrypt_cert().ts_end())
         .ok_or_else(|| anyhow!("No certificates"))?;
-    let cert_bin = dnscrypt_encryption_params.dnscrypt_cert().as_bytes();
-    ensure!(cert_bin.len() <= 0xff, "Certificate too long");
-    ancount_inc(&mut packet)?;
-    packet.write_u16::<BigEndian>(0xc000 + DNS_HEADER_SIZE as u16)?;
-    packet.write_u16::<BigEndian>(DNS_TYPE_TXT)?;
-    packet.write_u16::<BigEndian>(DNS_CLASS_INET)?;
-    packet.write_u32::<BigEndian>(DNSCRYPT_CERTS_RENEWAL)?;
-    packet.write_u16::<BigEndian>(1 + cert_bin.len() as u16)?;
-    packet.write_u8(cert_bin.len() as u8)?;
-    packet.extend_from_slice(cert_bin);
+    // The classical certificate is small and always included.
+    append_txt_cert(&mut packet, dnscrypt_encryption_params.dnscrypt_cert().as_bytes())?;
+    if pq_enabled {
+        if let Some(pq) = dnscrypt_encryption_params.pq() {
+            // PQ certificates are ~1.3 KB each, so returning one over UDP in
+            // response to a small, possibly spoofed query would turn the resolver
+            // into an amplifier. The anti-amplification rule is the same one
+            // classical DNSCrypt already enforces: a UDP response MUST NOT be
+            // larger than the request that triggered it. A client that wants the
+            // PQ certificate over UDP pads its query to at least the response
+            // size, exactly as a PQ data query already carries a ~1.1 KB
+            // ciphertext. The advertised EDNS(0) buffer is a fragmentation hint,
+            // not an amplification limit, since a spoofed query can advertise any
+            // buffer. Over TCP the source address is validated by the handshake,
+            // so the PQ certificate is always included. Whatever does not fit is
+            // withheld with the TC bit set so the client retries over TCP.
+            let fits_over_udp =
+                packet.len() + txt_cert_rr_len(pq.cert_bytes()) <= client_packet.len();
+            if !over_udp || fits_over_udp {
+                append_txt_cert(&mut packet, pq.cert_bytes())?;
+            } else {
+                truncate(&mut packet);
+            }
+        }
+    }
     ensure!(packet.len() < DNS_MAX_PACKET_SIZE, "Packet too large");
 
     Ok(Some(packet))
@@ -677,4 +723,26 @@ pub fn serve_ip_response(client_packet: Vec<u8>, ip: IpAddr, ttl: u32) -> Result
         }
     };
     Ok(packet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn appended_len(cert_bin: &[u8]) -> usize {
+        let mut packet = vec![0u8; DNS_HEADER_SIZE];
+        append_txt_cert(&mut packet, cert_bin).unwrap();
+        packet.len() - DNS_HEADER_SIZE
+    }
+
+    #[test]
+    fn txt_cert_rr_len_matches_appended_bytes() {
+        // The UDP amplification gate compares the request length against the
+        // predicted response length, so txt_cert_rr_len must equal exactly what
+        // append_txt_cert writes, including around the 255-byte chunk boundary.
+        for len in [0usize, 1, 124, 254, 255, 256, 509, 510, 511, 1320, 5000] {
+            let cert = vec![0x42u8; len];
+            assert_eq!(txt_cert_rr_len(&cert), appended_len(&cert), "len {len}");
+        }
+    }
 }

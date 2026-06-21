@@ -1,6 +1,6 @@
 [package]
 name = "encrypted-dns"
-version = "0.9.20"
+version = "0.9.21"
 authors = ["Frank Denis <github@pureftpd.org>"]
 edition = "2018"
 description = "A modern encrypted DNS server (DNSCrypt v2, Anonymized DNSCrypt, DoH)"
@@ -10,6 +10,14 @@ homepage = "https://github.com/jedisct1/encrypted-dns-server"
 repository = "https://github.com/jedisct1/encrypted-dns-server"
 categories = ["asynchronous", "network-programming", "command-line-utilities"]
 readme = "README.md"
+include = [
+  "src/**/*.rs",
+  "Cargo.toml",
+  "Cargo.lock",
+  "README.md",
+  "LICENSE",
+  "example-encrypted-dns.toml",
+]
 
 [dependencies]
 anyhow = "1.0.102"
